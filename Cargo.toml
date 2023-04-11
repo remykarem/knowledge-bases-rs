@@ -1,0 +1,19 @@
+[package]
+name = "kb"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.70"
+globwalk = "0.8.1"
+qdrant-client = "1.1.0"
+rust-bert = "0.20.0"
+tokio = { version = "1.27.0", features = ["rt-multi-thread"] }
+tonic = "0.9.1"
+
+[patch.crates-io]
+# Something went wrong while downloading the transient dependency 0.6.2,
+# so we patch it to the next available version; 0.6.4.
+miniz_oxide = { git = "https://github.com/Frommi/miniz_oxide.git", tag = "0.6.4" }
