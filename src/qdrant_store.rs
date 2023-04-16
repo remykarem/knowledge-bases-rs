@@ -1,8 +1,8 @@
-use crate::{document_loader::DirectoryLoader, embedding::Embedding, vector_store::VectorStore};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
-use anyhow::Result;
-use async_trait::async_trait;
 use qdrant_client::{
     prelude::*,
     qdrant::{
@@ -11,47 +11,32 @@ use qdrant_client::{
     },
 };
 use rust_bert::pipelines::sentence_embeddings::SentenceEmbeddingsModel;
-use tokio::runtime::{Builder, Handle, Runtime};
 
 use crate::Document;
 
-pub struct QdrantStore
-{
+pub struct QdrantStore {
     client: QdrantClient,
-    // embedding: E,
-    // rt: Runtime,
+    model: Arc<Mutex<SentenceEmbeddingsModel>>,
 }
 
-impl QdrantStore
-{
-    pub async fn new() -> Self
-    {
+impl QdrantStore {
+    pub async fn new(model: Arc<Mutex<SentenceEmbeddingsModel>>) -> Self {
         let config = QdrantClientConfig::from_url("http://localhost:6334");
-        // let rt = Builder::new_current_thread().build().unwrap();
-        // let client = rt.block_on(async {
-           let client = QdrantClient::new(Some(config))
-                .await
-                .expect("Failed to create client");
-        // });
+        let client = QdrantClient::new(Some(config))
+            .await
+            .expect("Failed to create client");
 
-        Self {
-            client,
-            // embedding,
-            // rt,
-        }
+        Self { client, model }
     }
 }
 
-#[async_trait]
-impl VectorStore for QdrantStore
-{
-    async fn get_all_collections(&self) -> Vec<String> {
-        let collections = 
-            self.client
-                .list_collections()
-                .await
-                .expect("Failed to list collections")
-        ;
+impl QdrantStore {
+    pub async fn get_all_collections(&self) -> Vec<String> {
+        let collections = self
+            .client
+            .list_collections()
+            .await
+            .expect("Failed to list collections");
 
         collections
             .collections
@@ -60,23 +45,33 @@ impl VectorStore for QdrantStore
             .collect()
     }
 
-    async fn add(&self, model: SentenceEmbeddingsModel, collection_name: &str, docs: &[Document]) -> SentenceEmbeddingsModel {
-        let data = model.encode(docs).unwrap();
+    pub async fn add(&self, collection_name: &str, docs: Vec<Document>) {
+        let model = self.model.clone();
 
-            self.client
-                .create_collection(&CreateCollection {
-                    collection_name: collection_name.into(),
-                    vectors_config: Some(VectorsConfig {
-                        config: Some(Config::Params(VectorParams {
-                            size: 384,
-                            distance: Distance::Cosine.into(),
-                        })),
-                    }),
-                    ..Default::default()
-                })
-                .await
-                .unwrap();
-        
+        // TODO
+        // Clone docs
+        let docs2 = docs.clone();
+
+        let data = tokio::task::spawn_blocking(move || {
+            let model_lock = model.lock().unwrap();
+            model_lock.encode(&docs).unwrap()
+        })
+        .await
+        .unwrap();
+
+        self.client
+            .create_collection(&CreateCollection {
+                collection_name: collection_name.into(),
+                vectors_config: Some(VectorsConfig {
+                    config: Some(Config::Params(VectorParams {
+                        size: 384,
+                        distance: Distance::Cosine.into(),
+                    })),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let points = data
             .into_iter()
@@ -85,7 +80,7 @@ impl VectorStore for QdrantStore
                 PointStruct::new(
                     i as u64,
                     vector,
-                    vec![("source", docs.get(i).unwrap().id().into())]
+                    vec![("source", docs2.get(i).unwrap().id().into())]
                         .into_iter()
                         .collect::<HashMap<&str, Value>>()
                         .into(),
@@ -93,35 +88,35 @@ impl VectorStore for QdrantStore
             })
             .collect::<Vec<_>>();
 
-            self.client
-                .upsert_points_blocking(collection_name, points, None)
-                .await
-                .unwrap();
-
-        model
+        self.client
+            .upsert_points_blocking(collection_name, points, None)
+            .await
+            .unwrap();
     }
 
-    async fn search(&self, vector: Vec<f32>, collection_name: &str) -> Vec<String> {
-        let search_result = 
-            self.client
-                .search_points(&SearchPoints {
-                    collection_name: collection_name.into(),
-                    vector,
-                    filter: None,
-                    limit: 3,
-                    with_vectors: None,
-                    with_payload: Some(WithPayloadSelector {
-                        selector_options: Some(SelectorOptions::Include(PayloadIncludeSelector {
-                            fields: vec!["source".to_string()],
-                        })),
-                    }),
-                    params: None,
-                    score_threshold: None,
-                    offset: None,
-                    ..Default::default()
-                })
-                .await
-                .expect("Error searching");
+    pub async fn search(&self, query: String, collection_name: &str) -> Vec<String> {
+        let vector = self.embed_query(query).await;
+
+        let search_result = self
+            .client
+            .search_points(&SearchPoints {
+                collection_name: collection_name.into(),
+                vector,
+                filter: None,
+                limit: 3,
+                with_vectors: None,
+                with_payload: Some(WithPayloadSelector {
+                    selector_options: Some(SelectorOptions::Include(PayloadIncludeSelector {
+                        fields: vec!["source".to_string()],
+                    })),
+                }),
+                params: None,
+                score_threshold: None,
+                offset: None,
+                ..Default::default()
+            })
+            .await
+            .expect("Error searching");
 
         search_result
             .result
@@ -139,11 +134,27 @@ impl VectorStore for QdrantStore
             .collect()
     }
 
-    fn embed_documents(&self, model: SentenceEmbeddingsModel, documents: &[Document]) -> Vec<Vec<f32>> {
-        model.encode(documents).unwrap()
+    pub async fn embed_documents(&self, docs: Vec<Document>) -> Vec<Vec<f32>> {
+        let model = self.model.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let model_lock = model.lock().unwrap();
+            model_lock.encode(&docs).unwrap()
+        })
+        .await
+        .unwrap()
     }
 
-    fn embed_query(&self, model: SentenceEmbeddingsModel, query: &str) -> Vec<Vec<f32>> {
-        model.encode(&[query]).unwrap()
+    async fn embed_query(&self, query: String) -> Vec<f32> {
+        let model = self.model.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let model_lock = model.lock().unwrap();
+            model_lock.encode(&[&query]).unwrap()
+        })
+        .await
+        .unwrap()
+        .pop()
+        .unwrap()
     }
 }

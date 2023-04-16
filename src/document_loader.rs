@@ -1,10 +1,9 @@
-use anyhow::Result;
 use std::{fs, path::PathBuf};
 
-use globwalk::{GlobWalker, GlobWalkerBuilder};
+use globwalk::GlobWalkerBuilder;
 use std::path::Path;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Document {
     id: String,
     text: String,
@@ -70,16 +69,4 @@ impl DirectoryLoader {
             })
             .collect()
     }
-    // async fn create(&self, path: String, pattern: String, collection_name: String) -> Result<()> {
-    //     let docs = tokio::task::spawn_blocking(move || {
-    //         DirectoryLoader::find_files_with_pattern(Path::new(&path), &pattern).unwrap()
-    //     })
-    //     .await?;
-
-    //     let (embs, docus) = tokio::task::spawn_blocking(move || embed(docs)).await?;
-
-    //     self.add(embs, &collection_name, &docus).await?;
-
-    //     Ok(())
-    // }
 }

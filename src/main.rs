@@ -5,44 +5,54 @@ pub mod retriever;
 pub mod vector_store;
 
 use document_loader::{DirectoryLoader, Document};
-use std::{io::Write, vec};
-use tokio::runtime::Handle;
-use vector_store::VectorStore;
+use std::vec;
 
 use std::path::Path;
 
-use inquire::Select;
-
 #[tokio::main]
 async fn main() {
-    // create(
-    //     "/Users/raimibinkarim/Desktop/_/Utils/remykarem.github.io/books/ai-book/src".into(),
-    //     "**/*.md".into(),
-    //     "ai-book-4".into(),
-    // ).await.unwrap();
-
-    let loader = DirectoryLoader::find_files_with_pattern(
-        Path::new("/Users/raimibinkarim/Desktop/_/Utils/remykarem.github.io/books/ai-book/src"),
-        "**/*.md",
-    );
-    let docs = loader.load();
-    let mut embedding = tokio::task::spawn_blocking(embedding::SomeEmbedding::new)
+    // Load the embedding model
+    let embedding = tokio::task::spawn_blocking(embedding::SomeEmbedding::new)
         .await
         .unwrap();
-    let vector_store = qdrant_store::QdrantStore::new().await;
+
+    // Load the vector store
+    let vector_store = qdrant_store::QdrantStore::new(embedding.clone()).await;
 
     loop {
-        let select = Select::new("hello", vec!["search", "add"])
+        // Which mode
+        let select = inquire::Select::new("Create or search collection?", vec!["Create", "Search"])
             .prompt()
             .unwrap();
 
-        if select == "search" {
-        } else {
+        match select {
+            "Create" => {
+                // Ask the relevant information
+                let collection_name = inquire::Text::new("Collection name?").prompt().unwrap();
+                let directory = inquire::Text::new("Directory?").prompt().unwrap();
+                let pattern = inquire::Text::new("Pattern?").prompt().unwrap();
 
-            let embedding2 = vector_store
-                .add(embedding, "collection_name", &docs)
-                .await
-                ;
+                // Load the documents
+                let docs =
+                    DirectoryLoader::find_files_with_pattern(Path::new(&directory), &pattern)
+                        .load();
+
+                // Add the documents to the vector store
+                vector_store.add(&collection_name, docs).await;
+            }
+            "Search" => {
+                // Ask the relevant information
+                let collections = vector_store.get_all_collections().await;
+                let collection_name = inquire::Select::new("Which collection?", collections)
+                    .prompt()
+                    .unwrap();
+                let query = inquire::Text::new("Query?").prompt().unwrap();
+
+                // Search the vector store
+                let results = vector_store.search(query, &collection_name).await;
+                println!("{:?}", results);
+            }
+            _ => {}
         }
     }
 }
