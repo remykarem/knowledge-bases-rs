@@ -7,7 +7,9 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.70"
+async-trait = "0.1.68"
 globwalk = "0.8.1"
+inquire = "0.6.1"
 qdrant-client = "1.1.0"
 rust-bert = "0.20.0"
 tokio = { version = "1.27.0", features = ["rt-multi-thread"] }
